@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>God Mode: Right Hand Invisibility Cloak</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #webcam {
+            transform: scaleX(-1);
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            visibility: hidden; /* ซ่อนกล้องจริงไว้ ใช้ WebGL วาดแทน */
+        }
+        #canvas-container {
+            position: absolute;
+            width: 100vw;
+            height: 100vh;
+            top: 0;
+            left: 0;
+        }
+        #status-ui {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 24px;
+            background: rgba(0, 0, 0, 0.75);
+            color: #00ffcc;
+            font-weight: bold;
+            border-radius: 30px;
+            border: 2px solid #00ffcc;
+            box-shadow: 0 0 20px rgba(0,255,204,0.5);
+            font-size: 18px;
+            pointer-events: none;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            z-index: 10;
+        }
+        .invisible-mode {
+            color: #ff00ff !important;
+            border-color: #ff00ff !important;
+            box-shadow: 0 0 30px rgba(255,0,255,0.8) !important;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: translateX(-50%) scale(1); }
+            50% { transform: translateX(-50%) scale(1.05); }
+            100% { transform: translateX(-50%) scale(1); }
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script type="module">
+        import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8";
+        
+        // ประกาศตัวแปรระดับ Global
+        let handLandmarker;
+        let runningMode = "VIDEO";
+        let video = document.getElementById("webcam");
+        let statusUi = document.getElementById("status-ui");
+        
+        // Three.js Setup
+        let scene, camera, renderer, texture, videoMaterial, videoMesh;
+        let ghostMaterial, ghostMesh;
+        let lastVideoTime = -1;
+
+        async function init() {
+            // 1. Setup Three.js สำหรับสร้าง Effect ล่องหนระดับพระเจ้า
+            scene = new THREE.Scene();
+            camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // สร้าง Texture จากกล้องวิดีโอ
+            texture = new THREE.VideoTexture(video);
+            
+            // พื้นหลังปกติ (ภาพจากกล้อง)
+            videoMaterial = new THREE.MeshBasicMaterial({ map: texture });
+            const planeGeo = new THREE.PlaneGeometry(2, 2);
+            videoMesh = new THREE.Mesh(planeGeo, videoMaterial);
+            scene.add(videoMesh);
+
+            // เอฟเฟกต์ล่องหน (Ghost Effect) แบบกระจกหักเหแสงไซไฟ
+            ghostMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    u_time: { value: 0 },
+                    u_texture: { value: texture },
+                    u_stealth: { value: 0.0 } // 0 = ปกติ, 1 = ล่องหนเฟี้ยวๆ
+                },
+                vertexShader: `
+                    varying vec2 vUv;
+                    void main() {
+                        vUv = vec2(1.0 - uv.x, uv.y); // Flip X ให้เหมือนกระจกเงา
+                        gl_Position = vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform sampler2D u_texture;
+                    uniform float u_time;
+                    uniform float u_stealth;
+                    varying vec2 vUv;
+                    void main() {
+                        // สร้างคลื่นหักเหแสงความร้อน (Stealth Distortion)
+                        vec2 distortedUv = vUv;
+                        if(u_stealth > 0.01) {
+                            distortedUv.x += sin(vUv.y * 20.0 + u_time * 5.0) * 0.007 * u_stealth;
+                            distortedUv.y += cos(vUv.x * 20.0 + u_time * 5.0) * 0.007 * u_stealth;
+                        }
+                        
+                        vec4 texColor = texture2D(u_texture, distortedUv);
+                        
+                        // เติม Aura สีฟ้านีออนบางๆ รอบๆ ตัวเวลาร่างล่องหน
+                        vec4 neonColor = vec4(0.0, 0.9, 1.0, 1.0);
+                        float edgeGlow = sin(u_time * 2.0) * 0.1 + 0.1;
+                        
+                        // ผสมผสานเอฟเฟกต์พรางตา
+                        vec4 finalColor = mix(texColor, texColor + neonColor * edgeGlow, u_stealth);
+                        
+                        // ปรับให้เห็นทะลุลางๆ
+                        if(u_stealth > 0.0) {
+                            finalColor.rgb *= (1.0 - (u_stealth * 0.25)); 
+                        }
+                        
+                        gl_FragColor = finalColor;
+                    }
+                `,
+                transparent: true
+            });
+
+            // Mesh สำหรับแสดงผลเอฟเฟกต์ทับด้านบน
+            ghostMesh = new THREE.Mesh(planeGeo, ghostMaterial);
+            scene.add(ghostMesh);
+
+            // 2. เรียกใช้งานเซนเซอร์ AI ตรวจจับมือ
+            statusUi.innerText = "กำลังปลุกพลัง AI...";
+            const vision = await FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm"
+            );
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                    delegate: "GPU" // บังคับใช้ GPU บนมือถือเพื่อความลื่นไหลระดับ 60FPS
+                },
+                runningMode: runningMode,
+                numHands: 2
+            });
+            
+            statusUi.innerText = "ระบบพร้อม! ยื่นมือขวาออกมา";
+            startCamera();
+        }
+
+        // เปิดกล้องบนมือถือ (รองรับทั้ง iOS และ Android)
+        function startCamera() {
+            const constraints = {
+                video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
+            };
+            navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
+                video.srcObject = stream;
+                video.addEventListener("loadeddata", predictWebcam);
+            }).catch(err => {
+                statusUi.innerText = "กล้องไม่ทำงาน รีเฟรชด่วน!";
+                console.error(err);
+            });
+        }
+
+        // ฟังก์ชันคำนวณระยะห่างระหว่างจุดเพื่อเช็คว่า "กำมือ" หรือไม่
+        function getDistance(p1, p2) {
+            return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2) + Math.pow(p1.z - p2.z, 2));
+        }
+
+        let targetStealth = 0.0;
+        let currentStealth = 0.0;
+
+        async function predictWebcam() {
+            let startTimeMs = performance.now();
+            if (lastVideoTime !== video.currentTime) {
+                lastVideoTime = video.currentTime;
+                const results = handLandmarker.detectForVideo(video, startTimeMs);
+                
+                let isRightHandFist = false;
+
+                if (results.landmarks && results.handedness) {
+                    for (let i = 0; i < results.landmarks.length; i++) {
+                        const landmarks = results.landmarks[i];
+                        const handedness = results.handedness[i][0].categoryName; 
+                        
+                        // เนื่องจากกล้องส่องหน้าสลับฝั่ง (Mirror) 
+                        // ใน MediaPipe 'Left' จะหมายถึง 'มือขวา' จริงๆ ของเราในจอกระจก
+                        if (handedness === "Left") { 
+                            // คำนวณนิ้วทั้ง 4 ว่าพับลงมาหาฝ่ามือ (จุดที่ 0 และ 9) หรือไม่
+                            const wrist = landmarks[0];
+                            const indexTip = landmarks[8];
+                            const middleTip = landmarks[12];
+                            const ringTip = landmarks[16];
+                            const pinkyTip = landmarks[20];
+                            
+                            const d1 = getDistance(indexTip, wrist);
+                            const d2 = getDistance(middleTip, wrist);
+                            const d3 = getDistance(ringTip, wrist);
+                            const d4 = getDistance(pinkyTip, wrist);
+
+                            // ค่า Threshold ตรวจจับการกำมือ (ยิ่งน้อยคือกำแน่น)
+                            if (d1 < 0.25 && d2 < 0.25 && d3 < 0.25 && d4 < 0.25) {
+                                isRightHandFist = true;
+                            }
+                        }
+                    }
+                }
+
+                if (isRightHandFist) {
+                    targetStealth = 1.0; // เข้าสู่สถานะล่องหน
+                    statusUi.innerText = "🔮 คาถาล่องหนทำงาน! 🔮";
+                    statusUi.classList.add("invisible-mode");
+                } else {
+                    targetStealth = 0.0; // กลับร่างเดิม
+                    statusUi.innerText = "✋ กำมือขวาเพื่อล่องหน ✋";
+                    statusUi.classList.remove("invisible-mode");
+                }
+            }
+
+            // ทำให้อัตราการล่องหนมันสมูท (Lerp Effect) ไม่แข็งกระด้าง
+            currentStealth += (targetStealth - currentStealth) * 0.1;
+            
+            // อัปเดตค่าเข้าสู่ Shader
+            ghostMaterial.uniforms.u_stealth.value = currentStealth;
+            ghostMaterial.uniforms.u_time.value = performance.now() / 1000;
+
+            // Render ฉาก
+            renderer.render(scene, camera);
+            window.requestAnimationFrame(predictWebcam);
+        }
+
+        // รองรับการหมุนจอมือถือ
+        window.addEventListener('resize', () => {
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        window.onload = init;
+    </script>
+</head>
+<body>
+    <div id="status-ui">กำลังบูตระบบเทพ...</div>
+    <div id="canvas-container"></div>
+    <video id="webcam" autoplay playsinline></video>
+</body>
+</html>
